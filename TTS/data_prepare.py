@@ -7,25 +7,42 @@ from hyperpyyaml import load_hyperpyyaml
 from speechbrain.inference import GraphemeToPhoneme
 from speechbrain.utils.text_to_sequence import text_to_sequence, _g2p_keep_punctuations, _clean_text
 from speechbrain.utils.data_utils import scalarize
+import speechbrain.dataio.dataset
 from speechbrain.dataio.dataio import read_audio
 import speechbrain.utils.data_pipeline
 import torchaudio
 import matplotlib.pyplot as plt
 
-
 from TTS.MelSpectogram import MelSpectrogram
 
 
 def dataio_prepare(hparams):
+    # 1. Declarations:
+    train_data = sb.dataio.dataset.DynamicItemDataset.from_json(
+        json_path=hparams["train_json"],
+    )
+
+    valid_data = sb.dataio.dataset.DynamicItemDataset.from_json(
+        json_path=hparams["valid_json"],
+    )
+
+    test_data = sb.dataio.dataset.DynamicItemDataset.from_json(
+        json_path=hparams["test_json"],
+    )
+
+    datasets = [train_data, valid_data, test_data]
+
     # Done
     @sb.utils.data_pipeline.takes("wav")
     @sb.utils.data_pipeline.provides("mel")
-    def audio_pipeline(wav):
+    def audio_spec_pipeline(wav):
         mel_spectogram = MelSpectrogram(sample_rate=22050, n_fft=2048, win_length=None, hop_length=512, n_mels=128)
         audio = sb.dataio.dataio.read_audio(wav)
         mel = mel_spectogram(audio)
 
         return mel
+
+    sb.dataio.dataset.add_dynamic_item(datasets, audio_spec_pipeline)
 
     # Done
     @sb.utils.data_pipeline.takes("transcript")
@@ -43,20 +60,16 @@ def dataio_prepare(hparams):
         # Convert the text to a sequence and to a tensor
         embedded_phonemes = torch.IntTensor(text_to_sequence(phonemes_str, ["english_cleaners"]))
 
-        return phonemes_str, embedded_phonemes
+        yield phonemes_str, embedded_phonemes
 
-    datasets = {}
-    data_info = {
-        "train": hparams["train_json"],
-        "valid": hparams["valid_json"],
-        "test": hparams["test_json"],
-    }
-    for dataset in hparams["splits"]:
-        datasets[dataset] = sb.dataio.dataset.DynamicItemDataset.from_json(
-            json_path=data_info[dataset],
-            replacements={"data_root": hparams["data_folder"]},
-            dynamic_items=[text_pipeline, audio_pipeline],
-            output_keys=["phonemes", "mel", "wav", "label", "text"],
-        )
+    sb.dataio.dataset.add_dynamic_item(datasets, text_pipeline)
 
-    return datasets
+    sb.dataio.dataset.set_output_keys(
+        datasets, ["wav", "mel", "transcript", "phonemes_str", "embedded_phonemes"],
+    )
+
+    return (
+        train_data,
+        valid_data,
+        test_data,
+    )
